@@ -102,8 +102,14 @@ operator<<(std::ostream& stream, const CompilationUnit& cu) {
 
 
 class ObjectFile {
-  public:
+  private:
+    std::regex include_regex {"\\s*#include\\s*[<\"]([^\">]+)[>\"]"};
+    Dwarf_Debug dbg;
+    Elf *elf;
+    std::unordered_map<std::string, CompilationUnit> compilation_units;
+    std::unordered_map<std::string, LazyFile *> headers_files;
 
+  public:
     ObjectFile (const char *filename) {
       int fd;
       void *data;
@@ -350,11 +356,6 @@ class ObjectFile {
       }
     }
 
-    std::regex include_regex {"\\s*#include\\s*[<\"]([^\">]+)[>\"]"};
-    Dwarf_Debug dbg;
-    Elf *elf;
-    std::unordered_map<std::string, CompilationUnit> compilation_units;
-    std::unordered_map<std::string,LazyFile *> headers_files;
 };
 
 
