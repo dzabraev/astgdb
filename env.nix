@@ -12,7 +12,10 @@ stdenv.mkDerivation {
     llvmPackages.llvm
     llvmPackages.clang-unwrapped
     cmake
+    meson
+    ninja
   ];
+
   LDFLAGS="-ldwarf -Wl,-rpath=${libdwarf}/lib -lelf -Wl,-rpath=${libelf}/lib -lboost_filesystem -lboost_system -Wl,-rpath=${llvmPackages.clang-unwrapped}/lib -L${llvmPackages.clang-unwrapped}/lib -Wl,-rpath=${llvmPackages.llvm}/lib -L${llvmPackages.llvm}/lib";
   nativeBuildInputs = [
     pkgconfig

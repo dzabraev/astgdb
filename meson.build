@@ -3,14 +3,22 @@ project('astgdb', 'cpp',
   license : 'MIT',
   default_options : ['cpp_std=c++1z'])
 
-libelf = dependency('libelf')
+add_global_arguments(['-g3','-O0'], language : 'cpp')
 
-incdir = include_directories('src/objutils/')
+libelf_dep = dependency('libelf')
+boost_dep = dependency('boost')
 
-srcs = ['src/main.cc',
+include_objutils = include_directories('src/objutils/')
+
+lib_objutils = static_library('objutils', [
   'src/objutils/Diagnostic.cc',
   'src/objutils/LazyFile.cc',
   'src/objutils/ObjectFileManager.cc',
-  'src/objutils/TranslationUnit.cc']
+  'src/objutils/TranslationUnit.cc'],
+  include_directories: include_objutils)
 
-executable('main', srcs, include_directories : incdir)
+executable('main', 'src/main.cc',
+  include_directories: include_objutils,
+  link_with: lib_objutils)
+
+subdir('tests')
