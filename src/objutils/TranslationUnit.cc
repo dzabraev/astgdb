@@ -30,13 +30,46 @@ std::vector<char *> *TranslationUnit::get_compile_flags(void) {
   return flags;
 }
 
+int TranslationUnit::get_path_idx(std::vector<std::string> paths, std::string path) {
+  int size = paths.size();
+  for (int i=0;i<size;i++) {
+    if(paths[i]==path)
+      return i;
+  }
+  return -1;
+}
 
 void TranslationUnit::get_include_paths(std::vector<char *> & flags) {
+  /*
+    For example, program have #include <A>
+    during compilation A resolves to absolute path F
+    in beyond code incl==A and fullpath==F.
+
+    We can construct P1 = F1-A1, P2=F2-A2 and we can compile
+    -IP1 -IP2
+    and
+    -IP2 -IP1
+    but order is matter.
+    Assume P1/A1 exists and P2/A1, P2/A2 exists
+    #include <A1>
+    #include <A2>
+
+    If we compile with -IP1 -IP2 this includes will be resolved to
+    #include "P1/A1"
+    #include "P2/A2"
+
+    If we include -IP2 -IP1 this will be resolved to
+    #include "P2/A1"
+    #include "P2/A2"
+
+    this function recovers original order of include dirs.
+  */
   std::unordered_set<std::string> paths;
+  std::vector<std::string> ordered_paths;
   for (auto && [ incl, fullpath ]: includes) {
     size_t len = fullpath.size(),
            incl_len = incl.size();
-    std::string && path = fullpath.substr(len-incl_len, incl_len);
+    std::string && path = fullpath.substr(len-incl_len,incl_len);
     if (path==incl) {
       paths.insert(fullpath.substr(0,len-incl_len));
     }
@@ -46,6 +79,32 @@ void TranslationUnit::get_include_paths(std::vector<char *> & flags) {
     }
   }
   for (auto path : paths) {
+    ordered_paths.push_back(path);
+  }
+  int paths_size = ordered_paths.size();
+  for (auto && [ incl, fullpath ]: includes) {
+    size_t len = fullpath.size(),
+           incl_len = incl.size();
+    std::string && ok_path = fullpath.substr(0,len-incl_len);
+    fs::path && fs_fullpath(fullpath);
+    int idx = get_path_idx (ordered_paths, ok_path);
+    assert(idx>=0);
+    for (int i=0;i<paths_size;i++) {
+      std::string path = ordered_paths[i];
+      if (!fs::exists(fs_fullpath)) {
+        mgr->warning(boost::format("Expected path %s does not exists. Path resolution algorithm probably wont work") % fs_fullpath);
+      }
+      if (fs::exists(fs::path(path)/fs::path(incl))) {
+        // [i,idx-1] + [idx] --> [idx] + [i+1,idx]
+        for (int j=idx;j>i;j--) {
+          ordered_paths[j] = ordered_paths[j-1];
+        }
+        ordered_paths[i] = ok_path;
+        break;
+      }
+    }
+  }
+  for (auto path : ordered_paths) {
     char *flg;
     asprintf(&flg, "-I%s", path.c_str());
     flags.push_back(flg);

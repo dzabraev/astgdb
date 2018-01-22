@@ -20,6 +20,7 @@ class ObjectFileManager: public Diagnostic {
     bool is_initialized_correctly(void) {return initialized_ok;}
 
     ObjectFileManager(const char *filename);
+    ObjectFileManager(std::string s) : ObjectFileManager(s.c_str()) {};
     ObjectFileManager(void *data, size_t n);
     ~ObjectFileManager (void);
 

@@ -6,12 +6,19 @@
 #include <list>
 #include <unordered_map>
 #include <regex>
+#include <vector>
 
 #include <dwarf.h>
 
 class ObjectFileManager;
+class Test_PRO;
 
 class TranslationUnit {
+  friend ObjectFileManager;
+
+  //testing
+  friend Test_PRO;
+
   private:
     std::string source_filename;
     Dwarf_Die cu_die;
@@ -23,8 +30,10 @@ class TranslationUnit {
     void extract_includes(void);
     void extract_includes_1(Dwarf_Macro_Context mcontext, Dwarf_Unsigned number_of_ops);
     std::string get_header_string (std::string include_filename, int line_number);
-    void get_include_paths(std::vector<char *> & flags);
+    int get_path_idx(std::vector<std::string> paths, std::string path);
 
+  protected:
+    void get_include_paths(std::vector<char *> & flags);
 
   public:
     TranslationUnit(ObjectFileManager *mgr, std::string filename, Dwarf_Die die);

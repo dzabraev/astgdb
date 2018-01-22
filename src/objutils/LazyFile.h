@@ -10,6 +10,7 @@ class LazyFile {
   public :
     std::string filename;
     LazyFile (std::string filename);
+    virtual ~LazyFile() {};
     const std::string & operator[] (int line_number);
 
   private :
