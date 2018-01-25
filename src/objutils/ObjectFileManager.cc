@@ -184,7 +184,8 @@ ObjectFileManager::extract_compilation_units(void) {
       continue;
     }
 
-    fs::path comp_unit_path = fs::weakly_canonical (fs::path (comp_dir_attr_str) / fs::path (comp_name_attr_str));
+    fs::path comp_unit_path = comp_name_attr_str[0]=='/' ? fs::path (comp_name_attr_str) : //if path relative, make it abs
+        fs::weakly_canonical (fs::path (comp_dir_attr_str) / fs::path (comp_name_attr_str));
     std::string spath = comp_unit_path.string();
     TranslationUnit *tu = new TranslationUnit(this, spath, cu_die);
     translation_units.insert ({spath, tu});
