@@ -7,6 +7,7 @@
 #include <vector>
 #include <boost/format.hpp>
 
+namespace astgdb {
 
 enum class DiagType {
   NOTSET   = 0,
@@ -39,4 +40,5 @@ class Diagnostic {
     void warning(boost::basic_format<char>& msg, const char *filename=NULL, int line=-1);
 };
 
+}
 #endif

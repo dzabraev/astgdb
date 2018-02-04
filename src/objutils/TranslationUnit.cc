@@ -4,128 +4,69 @@
 #include <unordered_set>
 #include <libdwarf.h>
 #include <dwarf.h>
+#include <tuple>
+#include <stdio.h>
 
 #include "ObjectFileManager.h"
 #include "TranslationUnit.h"
-#include "LazyFile.h"
+#include "Diagnostic.h"
 
 #include <boost/format.hpp>
 #include <boost/filesystem.hpp>
 namespace fs = boost::filesystem;
 
+#include "clang/Basic/Diagnostic.h"
+#include "clang/Basic/LLVM.h"
+#include "clang/Frontend/ASTUnit.h"
+#include "clang/Frontend/CompilerInvocation.h"
+#include "clang/Frontend/CompilerInstance.h"
+#include "llvm/ADT/IntrusiveRefCntPtr.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "clang/Frontend/CompilerInvocation.h"
+#include "clang/Lex/PreprocessorOptions.h"
 
-TranslationUnit::TranslationUnit(ObjectFileManager *mgr, std::string filename, Dwarf_Die cu_die) {
+using namespace clang;
+
+TranslationUnit::TranslationUnit(ObjectFileManager *mgr,
+    std::string filename, Dwarf_Die cu_die, astgdb::Diagnostic *diag) {
   this->mgr = mgr;
   this->source_filename = filename;
   this->cu_die = cu_die;
+  this->diag = diag;
 }
 
 TranslationUnit::~TranslationUnit(void) {
   dwarf_dealloc(mgr->get_dwarf_dbg(), cu_die, DW_DLA_DIE);
-}
-
-std::vector<char *> *TranslationUnit::get_compile_flags(void) {
-  std::vector<char *> *flags = new std::vector<char *>;
-  get_include_paths(*flags);
-  return flags;
-}
-
-int TranslationUnit::get_path_idx(std::vector<std::string> paths, std::string path) {
-  int size = paths.size();
-  for (int i=0;i<size;i++) {
-    if(paths[i]==path)
-      return i;
+  for (auto pair : predefined_constants) {
+    if (pair.first)
+      free (pair.first);
+    if (pair.second)
+      free (pair.second);
   }
-  return -1;
-}
-
-void TranslationUnit::get_include_paths(std::vector<char *> & flags) {
-  /*
-    For example, program have #include <A>
-    during compilation A resolves to absolute path F
-    in beyond code incl==A and fullpath==F.
-
-    We can construct P1 = F1-A1, P2=F2-A2 and we can compile
-    -IP1 -IP2
-    and
-    -IP2 -IP1
-    but order is matter.
-    Assume P1/A1 exists and P2/A1, P2/A2 exists
-    #include <A1>
-    #include <A2>
-
-    If we compile with -IP1 -IP2 this includes will be resolved to
-    #include "P1/A1"
-    #include "P2/A2"
-
-    If we include -IP2 -IP1 this will be resolved to
-    #include "P2/A1"
-    #include "P2/A2"
-
-    this function recovers original order of include dirs.
-  */
-  std::unordered_set<std::string> paths;
-  std::vector<std::string> ordered_paths;
-  for (auto && [ incl, fullpath ]: includes) {
-    size_t len = fullpath.size(),
-           incl_len = incl.size();
-    std::string && path = fullpath.substr(len-incl_len,incl_len);
-    if (path==incl) {
-      paths.insert(fullpath.substr(0,len-incl_len));
-    }
-    else {
-      mgr->warning(boost::format("Bad suffix: suffix=%s path=%s") % incl % fullpath);
-      continue;
-    }
+  for (auto key : predefined_constants_flags) {
+    free (key);
   }
-  for (auto path : paths) {
-    ordered_paths.push_back(path);
-  }
-  int paths_size = ordered_paths.size();
-  for (auto && [ incl, fullpath ]: includes) {
-    size_t len = fullpath.size(),
-           incl_len = incl.size();
-    std::string && ok_path = fullpath.substr(0,len-incl_len);
-    fs::path && fs_fullpath(fullpath);
-    int idx = get_path_idx (ordered_paths, ok_path);
-    assert(idx>=0);
-    for (int i=0;i<paths_size;i++) {
-      std::string path = ordered_paths[i];
-      if (!fs::exists(fs_fullpath)) {
-        mgr->warning(boost::format("Expected path %s does not exists. Path resolution algorithm probably wont work") % fs_fullpath);
-      }
-      if (fs::exists(fs::path(path)/fs::path(incl))) {
-        // [i,idx-1] + [idx] --> [idx] + [i+1,idx]
-        for (int j=idx;j>i;j--) {
-          ordered_paths[j] = ordered_paths[j-1];
-        }
-        ordered_paths[i] = ok_path;
-        break;
-      }
-    }
-  }
-  for (auto path : ordered_paths) {
-    char *flg;
-    asprintf(&flg, "-I%s", path.c_str());
-    flags.push_back(flg);
+  for (auto flag : predefined_files_flags) {
+    free (flag);
   }
 }
 
 void TranslationUnit::init(void) {
   if (initialized)
     return;
-  extract_includes();
+  extract_macro_info();
   initialized=true;
 }
 
 void
-TranslationUnit::extract_includes_1(
+TranslationUnit::extract_macro_info_1(
     Dwarf_Macro_Context mcontext,
     Dwarf_Unsigned number_of_ops)
 {
   int res;
   Dwarf_Error err = 0;
-  std::stack<fs::path> header_stack;
+  std::stack<unsigned> header_stack;
 
   for (Dwarf_Unsigned k = 0; k < number_of_ops; ++k) {
     Dwarf_Unsigned  section_offset = 0;
@@ -141,7 +82,7 @@ TranslationUnit::extract_includes_1(
         k, &section_offset,&macro_operator,
         &forms_count, &formcode_array,&err);
     if (res != DW_DLV_OK) {
-        mgr->warning(boost::format("ERROR from  dwarf_get_macro_op(): %s") %
+        diag->warning(boost::format("ERROR from  dwarf_get_macro_op(): %s") %
             dwarf_errmsg (err));
         return;
     }
@@ -153,24 +94,26 @@ TranslationUnit::extract_includes_1(
           &index,
           &macro_string,&err);
         if (res != DW_DLV_OK) {
-          mgr->warning(boost::format("ERROR from dwarf_get_macro_startend_file(): %s") %
+          diag->warning(boost::format("ERROR from dwarf_get_macro_startend_file(): %s") %
               dwarf_errmsg (err));
           return;
         }
         if (macro_string) {
           fs::path include_filename = fs::weakly_canonical (fs::path (macro_string));
           std::string sp = include_filename.string();
-          if (line_number>0) {
-            fs::path parent_filename = header_stack.top();
-            std::string header_string = get_header_string (parent_filename.string(), line_number-1);
-            if (!header_string.empty()) {
-              auto search = includes.find(header_string);
-              if(search==includes.end()) {
-                includes.insert({header_string, sp});
-              }
-            }
+          if (line_number>0 && !header_stack.empty()) {
+            unsigned parent_file_uid = header_stack.top();
+            //auto triplet = std::tuple<unsigned,unsigned,std::string>();
+            includes.push_back({parent_file_uid,line_number,include_filename.string()});
           }
-          header_stack.push (include_filename);
+          else if (line_number==0 && include_filename.string()!=source_filename) {
+            // predefined file.
+            predefined_files.push_back(include_filename.string());
+            char *flag;
+            asprintf(&flag,"-include%s",include_filename.string().c_str());
+            predefined_files_flags.push_back(flag);
+          }
+          header_stack.push (mgr->get_fileMgr()->getFile(StringRef(include_filename.string()))->getUID());
         }
         break;
       }
@@ -179,31 +122,71 @@ TranslationUnit::extract_includes_1(
         break;
       }
       case DW_MACRO_import: {
-        res = dwarf_get_macro_import(mcontext,
+        if (header_stack.empty()) {
+          // predefined constants and names
+          // We should process DW_MACRO_import
+          // directive only when we do not enter into file.
+          // Because in this case this imformation will perform
+          // in ast builder.
+          res = dwarf_get_macro_import(mcontext,
             k,&offset,&err);
-        if (res != DW_DLV_OK) {
-          mgr->warning(boost::format("ERROR from dwarf_get_macro_import(): %s") %
+          if (res != DW_DLV_OK) {
+            diag->warning(boost::format("ERROR from dwarf_get_macro_import(): %s") %
               dwarf_errmsg (err));
-          return;
+            continue;
+          }
+          process_macro_import(offset);
         }
         break;
+      }
+      case DW_MACRO_define_strp:
+      case DW_MACRO_define_strx:
+      case DW_MACRO_define_sup: {
+        res = dwarf_get_macro_defundef(mcontext,
+            k,
+            &line_number,
+            &index,
+            &offset,
+            &forms_count,
+            &macro_string,
+            &err);
+        if (res != DW_DLV_OK) {
+          diag->warning(boost::format("ERROR from sup dwarf_get_macro_defundef(): %s") %
+            dwarf_errmsg (err));
+          continue;
+        }
+        if (line_number==0) {
+          // predefined constants and names such -Dx=y -DNAME
+          int idx=-1;
+          const char *p=macro_string;
+          while (*p) {
+            if (*p==' ') {
+              idx = p-macro_string;
+              p++;
+            }
+          }
+          char *name;
+          char *val = 0;
+          char *key;
+          if (idx==-1) {
+            name = strdup(macro_string);
+            asprintf(&key,"-D%s",name);
+          }
+          else {
+            name = strndup(macro_string, idx);
+            val = strdup(macro_string+idx+1);
+            asprintf(&key,"-D%s=%s",name,val);
+          }
+          predefined_constants.push_back({name,val});
+          predefined_constants_flags.push_back(key);
+        }
       }
     }
   }
 }
 
-std::string TranslationUnit::get_header_string(
-  std::string include_filename, int line_number)
-{
-  LazyHeaderFile *f=mgr->get_header(include_filename);
-  std::smatch include_match;
-  if(std::regex_search(f[0][line_number], include_match, include_regex)) {
-    return include_match[1];
-  }
-  return std::string("");
-}
 
-void TranslationUnit::extract_includes (void) {
+void TranslationUnit::extract_macro_info (void) {
   Dwarf_Unsigned version = 0;
   Dwarf_Macro_Context mcontext = 0;
   Dwarf_Unsigned macro_unit_offset = 0;
@@ -221,12 +204,88 @@ void TranslationUnit::extract_includes (void) {
      &err);
 
   if (res==DW_DLV_OK) {
-    extract_includes_1 (mcontext, number_of_ops);
+    extract_macro_info_1 (mcontext, number_of_ops);
     dwarf_dealloc_macro_context(mcontext);
   }
   else {
     if (err)
-      mgr->warning(boost::format("dwarf_get_macro_context: %s\n") % dwarf_errmsg (err));
+      diag->warning(boost::format("dwarf_get_macro_context: %s\n") % dwarf_errmsg (err));
     return;
   }
 }
+
+void TranslationUnit::process_macro_import(Dwarf_Unsigned offset) {
+  int lres = 0;
+  Dwarf_Unsigned version = 0;
+  Dwarf_Macro_Context macro_context = 0;
+  Dwarf_Unsigned number_of_ops = 0;
+  Dwarf_Unsigned ops_total_byte_len = 0;
+  Dwarf_Error err = 0;
+
+  lres = dwarf_get_macro_context_by_offset(cu_die,
+    offset,
+    &version,&macro_context,
+    &number_of_ops,
+    &ops_total_byte_len,
+    &err);
+
+  if(lres == DW_DLV_NO_ENTRY) {
+    return;
+  }
+
+  if(lres == DW_DLV_ERROR) {
+    diag->warning(boost::format("Unable to dwarf_get_macro_context() %s\n") % dwarf_errmsg (err));
+    return;
+  }
+
+  for (int idx=0; idx<number_of_ops;idx++) {
+    
+  }
+
+}
+
+
+ASTUnit * TranslationUnit::produce_ast(void) {
+  IntrusiveRefCntPtr<DiagnosticsEngine>
+    Diags(CompilerInstance::createDiagnostics(new DiagnosticOptions));
+
+  std::unique_ptr<std::vector<const char *>> Args(
+      new std::vector<const char *>());
+  Args->push_back("-detailed-preprocessing-record");
+  Args->push_back("-fsyntax-only");
+  Args->push_back(source_filename.c_str());
+
+  std::cout<<boost::format("Total number of names = %s") % predefined_constants_flags.size()<<std::endl;
+  std::cout<<boost::format("Total number of include files = %s") % includes.size()<<std::endl;
+
+  for (auto flag : predefined_constants_flags) {
+    Args->push_back(flag);
+    std::cout<<flag<<std::endl;
+  }
+
+  for (auto flag : predefined_files_flags) {
+    Args->push_back(flag);
+    std::cout<<flag<<std::endl;
+  }
+
+  FileSystemOptions FSOpts;
+
+  CompilerInvocation * ptrCI = new CompilerInvocation;
+  std::shared_ptr<CompilerInvocation> CI(ptrCI);
+
+  CompilerInvocation::CreateFromArgs(*CI,Args->data(), Args->data() + Args->size(), *Diags);
+
+  for (auto && [parentUID, parentLine, inclAbsPath ]: includes) {
+    CI->getPreprocessorOpts().addInclMapping(parentUID, parentLine, inclAbsPath);
+  }
+
+  std::shared_ptr<PCHContainerOperations> pch_container(new PCHContainerOperations);
+
+  ast = ASTUnit::LoadFromCompilerInvocation(
+    CI, pch_container, Diags, mgr->get_fileMgr()).release();
+
+  return ast;
+}
+
+
+

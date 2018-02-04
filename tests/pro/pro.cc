@@ -3,11 +3,17 @@
 namespace fs = boost::filesystem;
 #include "ObjectFileManager.h"
 #include "TranslationUnit.h"
+#include "HeaderExtractor.h"
+#include "Diagnostic.h"
 
+#include "clang/Basic/FileSystemOptions.h"
+#include "clang/Basic/FileManager.h"
 
 class TestPRO: public ObjectFileManager {
   public:
-    TestPRO(std::string obj_name, std::string unit_name) : ObjectFileManager(obj_name) {
+    TestPRO(std::string obj_name, std::string unit_name,
+          FileManager *fileMgr, HeaderExtractor *hdrExtr, Diagnostic *diag) :
+        ObjectFileManager(obj_name, fileMgr, hdrExtr, diag) {
       this->unit_name = unit_name;
     }
     int test_path_recover_order(void) {
@@ -58,7 +64,13 @@ class TestPRO: public ObjectFileManager {
 int main(void) {
   std::string path = fs::weakly_canonical(fs::path("./tests/pro/sample")).string();
   std::string unit_name = fs::weakly_canonical(fs::path("../tests/pro/sample.cc")).string();
-  TestPRO mgr(path, unit_name);
+  FileSystemOptions FSOpts;
+  Diagnostic *diag = new Diagnostic;
+  FileManager *fileMgr = new FileManager(FSOpts);
+  HeaderExtractor *hdrExtr = new HeaderExtractor(fileMgr, diag);
+
+
+  TestPRO mgr(path, unit_name, fileMgr, hdrExtr, diag);
   if (mgr.is_initialized_correctly()) {
     return mgr.test_path_recover_order();
   }

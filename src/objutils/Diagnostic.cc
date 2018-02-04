@@ -2,6 +2,8 @@
 #include "Diagnostic.h"
 #include <boost/format.hpp>
 
+namespace astgdb {
+
 std::ostream& operator<<(std::ostream& os, DiagType type)
 {
     switch(type)
@@ -38,3 +40,4 @@ void Diagnostic::warning(boost::basic_format<char>& msg, const char *filename /*
   warning(msg.str(),filename,line);
 }
 
+}

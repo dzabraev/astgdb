@@ -7,18 +7,36 @@ add_global_arguments(['-g3','-O0'], language : 'cpp')
 
 libelf_dep = dependency('libelf')
 boost_dep = dependency('boost')
+#llvm_dep = dependency('llvm')
 
-include_objutils = include_directories('src/objutils/')
+clang_deps_ldflags = [
+  '-lclangFrontendTool',
+  '-lclangFrontend',
+  '-lclangDriver',
+  '-lclangSerialization',
+  '-lclangCodeGen',
+  '-lclangParse',
+  '-lclangSema',
+  '-lclangEdit',
+  '-lclangAnalysis',
+  '-lclangIndex',
+  '-lclangRewrite',
+  '-lclangAST',
+  '-lclangLex',
+  '-lclangBasic'
+]
+clang_dep = declare_dependency(link_args: clang_deps_ldflags)
 
-lib_objutils = static_library('objutils', [
-  'src/objutils/Diagnostic.cc',
-  'src/objutils/LazyFile.cc',
-  'src/objutils/ObjectFileManager.cc',
-  'src/objutils/TranslationUnit.cc'],
-  include_directories: include_objutils)
+subdir('src') # lib_objutils_dep
+              # include_objutils
 
 executable('main', 'src/main.cc',
   include_directories: include_objutils,
-  link_with: lib_objutils)
+  dependencies: [
+    lib_objutils_dep,
+    #llvm_dep,
+    clang_dep
+  ],
+)
 
 subdir('tests')

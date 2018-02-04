@@ -4,44 +4,57 @@
 #include <memory>
 #include <string>
 #include <list>
-#include <unordered_map>
 #include <regex>
 #include <vector>
-
+#include <tuple>
 #include <dwarf.h>
+#include "clang/Frontend/ASTUnit.h"
 
 class ObjectFileManager;
-class Test_PRO;
+
+namespace astgdb {
+  class Diagnostic;
+}
+
+using namespace clang;
 
 class TranslationUnit {
   friend ObjectFileManager;
-
-  //testing
-  friend Test_PRO;
 
   private:
     std::string source_filename;
     Dwarf_Die cu_die;
     ObjectFileManager *mgr;
-    std::unordered_map<std::string, std::string> includes;
-    std::regex include_regex {"\\s*#include\\s*[<\"]([^\">]+)[>\"]"};
+    std::vector<std::tuple<unsigned,unsigned,std::string>> includes; /// fileUID,line_num, abspath to header file
     bool initialized {false};
+    astgdb::Diagnostic *diag;
+    std::vector<std::pair<char *, char *>> predefined_constants; //-DNAME=123 --> (NAME,123)
+    std::vector<char *> predefined_constants_flags; //same as predefined_constants but in joined form -DNAME=123
+    ASTUnit *ast {nullptr};
+    std::vector<char *> predefined_files_flags; //-include=FILE
+    std::vector<std::string> predefined_files; //filenames whose will be include before parsing main file
 
-    void extract_includes(void);
-    void extract_includes_1(Dwarf_Macro_Context mcontext, Dwarf_Unsigned number_of_ops);
-    std::string get_header_string (std::string include_filename, int line_number);
-    int get_path_idx(std::vector<std::string> paths, std::string path);
 
-  protected:
-    void get_include_paths(std::vector<char *> & flags);
+    void extract_macro_info(void);
+    void extract_macro_info_1(Dwarf_Macro_Context mcontext, Dwarf_Unsigned number_of_ops);
+
+    ASTUnit * produce_ast(void);
 
   public:
-    TranslationUnit(ObjectFileManager *mgr, std::string filename, Dwarf_Die die);
+    std::string & get_source_filename(void) {
+      return source_filename;
+    }
+
+    ASTUnit * get_ast(void) {
+      if (!ast)
+        ast = produce_ast();
+      return ast;
+    }
+
+    TranslationUnit(ObjectFileManager *mgr, std::string filename, Dwarf_Die die, astgdb::Diagnostic *diag);
     ~TranslationUnit(void);
 
     void init(void);
-    std::vector<char *> * get_compile_flags(void);
-
 };
 
 #endif

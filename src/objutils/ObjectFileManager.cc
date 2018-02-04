@@ -4,32 +4,24 @@
 #include <fcntl.h>
 #include <err.h>
 #include <assert.h>
+#include <string.h>
 
 #include <libdwarf.h>
 #include <dwarf.h>
 #include <libelf.h>
 
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "clang/Basic/FileManager.h"
+
 #include "ObjectFileManager.h"
-#include "LazyFile.h"
 #include "TranslationUnit.h"
+#include "Diagnostic.h"
 
 #include <boost/format.hpp>
 #include <boost/filesystem.hpp>
 namespace fs = boost::filesystem;
 
-
-LazyHeaderFile *
-ObjectFileManager::get_header(std::string filename) {
-  auto search = headers.find(filename);
-  if(search != headers.end()) {
-    return search->second;
-  }
-  else {
-    LazyHeaderFile *f = new LazyHeaderFile(filename);
-    headers.insert({filename,f});
-    return f;
-  }
-}
 
 TranslationUnit *
 ObjectFileManager::get_translation_unit(std::string filename) {
@@ -45,22 +37,22 @@ ObjectFileManager::get_translation_unit(std::string filename) {
 }
 
 
-ObjectFileManager::ObjectFileManager(const char *filename) {
-  int fd;
-  void *data;
-  struct stat sb;
-  if ((fd = open(filename, O_RDONLY)) < 0 ||
-    fstat(fd, &sb) < 0 ||
-    (data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, (off_t) 0)) == MAP_FAILED)
-  {
-    warning(boost::format("can't read file %s") % filename);
+ObjectFileManager::ObjectFileManager(const char *filename,
+    clang::FileManager *fileMgr, astgdb::Diagnostic *diag) {
+  this->fileMgr = fileMgr;
+  this->diag = diag;
+  const FileEntry * fileEntry = fileMgr->getFile(StringRef(filename));
+  auto buf = fileMgr->getBufferForFile(fileEntry);
+  if (!buf) {
+    diag->warning(boost::format("can't read file %s %s") % filename % buf.getError().message());
     return;
   }
-  init (data, sb.st_size);
-}
 
-ObjectFileManager::ObjectFileManager(void *data, size_t n) {
-  init (data, n);
+  size_t sz = (*buf)->getBufferSize();
+  void *buf1 = malloc(sz);
+  assert (buf1);
+  memcpy(buf1,(*buf)->getBufferStart(), sz);
+  init (buf1, sz);
 }
 
 ObjectFileManager::~ObjectFileManager (void) {
@@ -69,9 +61,6 @@ ObjectFileManager::~ObjectFileManager (void) {
   if (!initialized_ok)
     return;
 
-  for (auto item : headers) {
-    delete item.second;
-  }
   for (auto item : translation_units) {
     delete item.second;
   }
@@ -95,16 +84,16 @@ bool ObjectFileManager::init_dwarf (void *data, size_t n) {
   elf_version(EV_CURRENT);
   if ((elf = elf_memory((char *) data, n)) == NULL) {
     /*error*/
-    warning(boost::format("elf_memory(): %s\n") %
+    diag->warning(boost::format("elf_memory(): %s\n") %
       elf_errmsg(elf_errno()));
     if (elf_version(EV_CURRENT) == EV_NONE) {
-      warning("ELF library too old");
+      diag->warning("ELF library too old");
       return false;
     }
   }
   res = dwarf_elf_init (elf, DW_DLC_READ, NULL, NULL, &dbg, &err);
   if (res != DW_DLV_OK) {
-    warning(boost::format("dwarf_init: %s") % dwarf_errmsg (err));
+    diag->warning(boost::format("dwarf_init: %s") % dwarf_errmsg (err));
     return false;
   }
   return true;
@@ -140,7 +129,7 @@ ObjectFileManager::extract_compilation_units(void) {
 
 
     if(res == DW_DLV_ERROR) {
-        warning(boost::format("Error in dwarf_next_cu_header: %s") % dwarf_errmsg(err));
+        diag->warning(boost::format("Error in dwarf_next_cu_header: %s") % dwarf_errmsg(err));
         has_error = true;
         break;
     }
@@ -151,7 +140,7 @@ ObjectFileManager::extract_compilation_units(void) {
 
     res = dwarf_siblingof_b (dbg, NULL,is_info, &cu_die, &err);
     if (res != DW_DLV_OK) {
-      warning(boost::format("siblingof cu header %s") % dwarf_errmsg (err));
+      diag->warning(boost::format("siblingof cu header %s") % dwarf_errmsg (err));
       has_error = true;
       break;
     }
@@ -162,12 +151,12 @@ ObjectFileManager::extract_compilation_units(void) {
     char *comp_name_attr_str=0;
     res = dwarf_attr(cu_die, DW_AT_name, &comp_name_attr, &err);
     if (res != DW_DLV_OK) {
-      warning(boost::format("dwarf_attr: %s") % dwarf_errmsg (err));
+      diag->warning(boost::format("dwarf_attr: %s") % dwarf_errmsg (err));
       continue;
     }
     res = dwarf_formstring(comp_name_attr, &comp_name_attr_str, &err);
     if (res!=DW_DLV_OK) {
-      warning("dwarf_formstring failed");
+      diag->warning("dwarf_formstring failed");
       continue;
     }
 
@@ -175,19 +164,19 @@ ObjectFileManager::extract_compilation_units(void) {
     char *comp_dir_attr_str=0;
     res = dwarf_attr(cu_die, DW_AT_comp_dir, &comp_dir_attr, &err);
     if (res != DW_DLV_OK) {
-      warning(boost::format("dwarf_attr: %s") % dwarf_errmsg (err));
+      diag->warning(boost::format("dwarf_attr: %s") % dwarf_errmsg (err));
       continue;
     }
     res = dwarf_formstring(comp_dir_attr, &comp_dir_attr_str, &err);
     if (res!=DW_DLV_OK) {
-      warning("dwarf_formstring failed");
+      diag->warning("dwarf_formstring failed");
       continue;
     }
 
     fs::path comp_unit_path = comp_name_attr_str[0]=='/' ? fs::path (comp_name_attr_str) : //if path relative, make it abs
         fs::weakly_canonical (fs::path (comp_dir_attr_str) / fs::path (comp_name_attr_str));
     std::string spath = comp_unit_path.string();
-    TranslationUnit *tu = new TranslationUnit(this, spath, cu_die);
+    TranslationUnit *tu = new TranslationUnit(this, spath, cu_die, diag);
     translation_units.insert ({spath, tu});
   }
   return !has_error;
