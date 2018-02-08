@@ -28,15 +28,46 @@ class TranslationUnit {
     std::vector<std::tuple<unsigned,unsigned,std::string>> includes; /// fileUID,line_num, abspath to header file
     bool initialized {false};
     astgdb::Diagnostic *diag;
-    std::vector<std::pair<char *, char *>> predefined_constants; //-DNAME=123 --> (NAME,123)
-    std::vector<char *> predefined_constants_flags; //same as predefined_constants but in joined form -DNAME=123
-    ASTUnit *ast {nullptr};
-    std::vector<char *> predefined_files_flags; //-include=FILE
-    std::vector<std::string> predefined_files; //filenames whose will be include before parsing main file
+    std::vector<std::pair<std::string, bool>> Macros; // pairs {isUndef, macro_string}
 
+    ASTUnit *ast {nullptr};
+    std::vector<std::string> PreIncludes; //filenames whose will be include before parsing main file
+
+    void add_define(bool isUndef, const char *macro_string) {
+      std::string macro(macro_string);
+      if (!isUndef) {
+        for (size_t idx=0;idx<macro.size();idx++) {
+          if (macro[idx]==' ') {
+            if (macro.substr(0,idx)==std::string("__has_include_next(STR)") //gcc
+                || macro.substr(0,idx)==std::string("__has_include(STR)") //gcc
+            ) {
+              //this is builtin macro in clang, skip
+              return;
+            }
+            macro[idx]='=';
+            break;
+          }
+        }
+      }
+      Macros.push_back({macro,isUndef});
+    };
+
+    void add_predefined_file(std::string filename) {
+      PreIncludes.push_back(filename);
+    }
 
     void extract_macro_info(void);
-    void extract_macro_info_1(Dwarf_Macro_Context mcontext, Dwarf_Unsigned number_of_ops);
+
+    void extract_macro_info_1(
+      std::stack<unsigned> & header_stack,
+      bool by_offset,
+      Dwarf_Unsigned offset);
+
+    void extract_macro_info_2(
+      std::stack<unsigned> & header_stack,
+      Dwarf_Macro_Context macro_context,
+      Dwarf_Unsigned number_of_ops);
+
 
     ASTUnit * produce_ast(void);
 
