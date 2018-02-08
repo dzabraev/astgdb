@@ -36,12 +36,16 @@ ObjectFileManager::get_translation_unit(std::string filename) {
   }
 }
 
-
+/// filename is path to object file
 ObjectFileManager::ObjectFileManager(const char *filename,
     clang::FileManager *fileMgr, astgdb::Diagnostic *diag) {
   this->fileMgr = fileMgr;
   this->diag = diag;
   const FileEntry * fileEntry = fileMgr->getFile(StringRef(filename));
+  if (!fileEntry) {
+    diag->warning(boost::format("File %s doesn't exist") % filename);
+    return;
+  }
   auto buf = fileMgr->getBufferForFile(fileEntry);
   if (!buf) {
     diag->warning(boost::format("can't read file %s %s") % filename % buf.getError().message());
