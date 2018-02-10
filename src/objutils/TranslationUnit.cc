@@ -218,6 +218,8 @@ ASTUnit * TranslationUnit::produce_ast(void) {
       new std::vector<const char *>());
   Args->push_back("-detailed-preprocessing-record");
   Args->push_back("-fsyntax-only");
+  Args->push_back("-std=c++17");
+  Args->push_back("-fcxx-exceptions");
   Args->push_back(source_filename.c_str());
 
   FileSystemOptions FSOpts;
@@ -230,6 +232,7 @@ ASTUnit * TranslationUnit::produce_ast(void) {
 
   ppOpts.UsePredefines = false;
   ppOpts.UseStandardPredefines = false;
+  ppOpts.DisableHeaderLookup = true;
 
   for (auto && [parentUID, parentLine, inclAbsPath ]: includes) {
     ppOpts.addInclMapping(parentUID, parentLine, inclAbsPath);
@@ -240,6 +243,7 @@ ASTUnit * TranslationUnit::produce_ast(void) {
 
   for (auto e : PreIncludes) {
     ppOpts.Includes.push_back(e);
+    std::cout<<e<<std::endl;
   }
 
   std::shared_ptr<PCHContainerOperations> pch_container(new PCHContainerOperations);
