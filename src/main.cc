@@ -6,6 +6,11 @@
 #include "clang/Basic/FileManager.h"
 #include "clang/Basic/FileSystemOptions.h"
 
+/*ast dump*/
+#include "clang/AST/ASTConsumer.h"
+#include "clang/Frontend/ASTConsumers.h"
+
+
 #include "ObjectFileManager.h"
 #include "TranslationUnit.h"
 #include "Diagnostic.h"
@@ -22,13 +27,12 @@ int main(int argc, char **argv) {
   const char *unit = argc>2 ? argv[2] : "/home/dza/source/astgdb/src/objutils/LazyFile.cc";
   if (mgr.is_initialized_correctly()) {
     TranslationUnit *tu = mgr.get_translation_unit(unit);
-    printf("p=%p\n",tu);
     if (tu) {
-      tu->get_ast();
-//      const std::vector<std::string> &flags = tu->get_compile_flags();
-//      for (const auto flag : flags) {
-//        std::cout<<flag<<std::endl;
-//      }
+      ASTUnit *ast = tu->get_ast();
+      //std::unique_ptr<clang::ASTConsumer> printer = clang::CreateDeclContextPrinter();
+      //printer->HandleTranslationUnit(ast->getASTContext());
+      std::unique_ptr<ASTConsumer> printer = CreateASTDumper(StringRef(""),true,true,true);
+      printer->HandleTranslationUnit(ast->getASTContext());
     }
     else {
       for (auto && [key, tu1] : mgr.get_translation_units()) {
