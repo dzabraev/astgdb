@@ -243,7 +243,6 @@ ASTUnit * TranslationUnit::produce_ast(void) {
 
   for (auto e : PreIncludes) {
     ppOpts.Includes.push_back(e);
-    std::cout<<e<<std::endl;
   }
 
   std::shared_ptr<PCHContainerOperations> pch_container(new PCHContainerOperations);
@@ -253,6 +252,3 @@ ASTUnit * TranslationUnit::produce_ast(void) {
 
   return ast;
 }
-
-
-
